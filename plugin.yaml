@@ -1,0 +1,17 @@
+name: subagent-viewer
+id: subagent-viewer
+version: 0.1.0
+description: >-
+  Read-only Subagent Viewer pane for Hermes Desktop. Live worker cards for
+  spawned subagents (goal, model, status, streaming thinking/tool/output),
+  Active/Past view toggle, and full-output copy. Observes and copies; never
+  steers, interrupts, spawns, or mutates the orchestrator session. This is the
+  MVP subset of the larger in-development Chief of Staff fan-out plugin.
+author: Halakukhan (Team6)
+license: MIT
+homepage: https://github.com/ahrazzle/hermes-subagent-viewer
+tags:
+  - multi-agent
+  - subagents
+  - delegation
+  - viewer
