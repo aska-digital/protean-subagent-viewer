@@ -1,6 +1,6 @@
 name: subagent-viewer
 id: subagent-viewer
-version: 0.1.0
+version: 0.1.2
 description: >-
   Read-only Subagent Viewer pane for Hermes Desktop. Live worker cards for
   spawned subagents (goal, model, status, streaming thinking/tool/output),
