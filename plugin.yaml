@@ -7,9 +7,9 @@ description: >-
   Active/Past view toggle, and full-output copy. Observes and copies; never
   steers, interrupts, spawns, or mutates the orchestrator session. This is the
   MVP subset of the larger in-development Chief of Staff fan-out plugin.
-author: Halakukhan (Team6)
+author: aska-digital
 license: MIT
-homepage: https://github.com/ahrazzle/hermes-subagent-viewer
+homepage: https://github.com/aska-digital/protean-subagent-viewer
 tags:
   - multi-agent
   - subagents
