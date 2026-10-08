@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>protean-subagent-viewer | live subagent cards for Hermes Desktop</title>
+<meta name="description" content="A read-only Subagent Viewer pane for Hermes Desktop. Every spawned subagent gets a live card: goal, model, status, streaming thinking, latest tool line, and accumulated output. Observes and copies; never steers, interrupts, or spawns.">
+<meta property="og:title" content="protean-subagent-viewer: live subagent cards for Hermes Desktop">
+<meta property="og:description" content="A read-only pane for Hermes Desktop that turns subagent fan-out into a live card view. Active/Past toggle, full-output copy, no steering, no spawning, no telemetry.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://aska-digital.github.io/protean-subagent-viewer/">
+<meta property="og:image" content="https://aska-digital.github.io/protean-subagent-viewer/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="protean-subagent-viewer: live subagent cards for Hermes Desktop">
+<meta name="twitter:description" content="A read-only pane for Hermes Desktop that turns subagent fan-out into a live card view. Observes and copies; never steers, interrupts, or spawns.">
+<meta name="twitter:image" content="https://aska-digital.github.io/protean-subagent-viewer/og-image.jpg">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#0b0e14; --panel:#11161f; --panel2:#151b26; --line:#232b3a;
+  --ink:#e8ecf3; --muted:#9aa5b8; --dim:#6b7488;
+  --accent:#7dd3fc; --accent-dim:#3b82a6; --ok:#7ee8a2; --warn:#ffd479; --bad:#ff9c9c;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:880px;margin:0 auto;padding:0 22px}
+header.top{border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(11,14,20,.92);backdrop-filter:blur(8px);z-index:10}
+header.top .wrap{display:flex;align-items:center;gap:18px;padding-top:14px;padding-bottom:14px}
+.brand{font-family:var(--mono);font-size:15px;color:var(--ink);text-decoration:none}
+.brand b{color:var(--accent)}
+nav{margin-left:auto;display:flex;gap:16px;font-size:14px}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--ink)}
+.hero{padding:72px 0 48px}
+.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--accent);text-transform:uppercase;margin:0 0 18px}
+h1{font-size:clamp(34px,6vw,52px);line-height:1.12;margin:0 0 18px;font-weight:650;letter-spacing:-.01em}
+h1 .slash{color:var(--accent)}
+.lede{font-size:19px;color:var(--muted);max-width:640px;margin:0 0 30px}
+.lede strong{color:var(--ink);font-weight:600}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:34px}
+.btn{display:inline-block;padding:11px 20px;border-radius:9px;font-size:15px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--ink);background:var(--panel)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#06121a}
+.btn:hover{filter:brightness(1.1)}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.badge{font-family:var(--mono);font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:4px 12px;background:var(--panel)}
+.badge .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:6px}
+.badge.warn .dot{background:var(--warn)}
+section{padding:44px 0;border-top:1px solid var(--line)}
+h2{font-size:26px;margin:0 0 6px;font-weight:650;letter-spacing:-.01em}
+h2 .n{font-family:var(--mono);font-size:15px;color:var(--dim);font-weight:400;margin-right:10px}
+.sub{color:var(--muted);margin:0 0 22px;max-width:660px}
+.sub strong{color:var(--ink);font-weight:600}
+.grid{display:grid;gap:14px}
+@media(min-width:700px){.grid.cols3{grid-template-columns:repeat(3,1fr)}.grid.cols2{grid-template-columns:repeat(2,1fr)}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+.card h3{margin:0 0 8px;font-size:16px}
+.card p{margin:0;color:var(--muted);font-size:14.5px}
+.card .tag{font-family:var(--mono);font-size:12px;color:var(--accent)}
+pre{background:#080b10;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:13.5px;line-height:1.6;color:#cdd6e4}
+code{font-family:var(--mono);font-size:.92em}
+.cmd{position:relative;margin:0 0 14px}
+.cmd button{position:absolute;top:8px;right:8px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:7px;font-size:12px;padding:5px 10px;cursor:pointer;font-family:var(--mono)}
+.cmd button:hover{color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:0 0 18px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:12.5px;color:var(--dim);font-weight:500}
+td.m{font-family:var(--mono);font-size:13.5px}
+td .ok{color:var(--ok)} td .warn{color:var(--warn)}
+.note{border-left:3px solid var(--accent-dim);padding:2px 0 2px 16px;color:var(--muted);font-size:14.5px;margin:0 0 18px}
+.note strong{color:var(--ink)}
+ul.tight{margin:0 0 18px;padding-left:20px;color:var(--muted)}
+ul.tight li{margin-bottom:6px}
+ul.tight strong{color:var(--ink);font-weight:600}
+footer{border-top:1px solid var(--line);padding:30px 0 60px;color:var(--dim);font-size:13.5px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+footer a{color:var(--muted);text-decoration:none}
+footer a:hover{color:var(--ink)}
+.spacer{flex:1}
+.pill{display:inline-block;font-family:var(--mono);font-size:12px;border-radius:6px;padding:2px 9px;margin-right:6px}
+.pill.run{background:rgba(126,232,162,.12);color:var(--ok);border:1px solid rgba(126,232,162,.3)}
+.pill.done{background:rgba(125,211,252,.12);color:var(--accent);border:1px solid rgba(125,211,252,.3)}
+.pill.int{background:rgba(255,212,121,.12);color:var(--warn);border:1px solid rgba(255,212,121,.3)}
+.pill.err{background:rgba(255,156,156,.12);color:var(--bad);border:1px solid rgba(255,156,156,.3)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top"><b>protean</b>-subagent-viewer</a>
+    <nav>
+      <a href="#install">Install</a>
+      <a href="#cards">Cards</a>
+      <a href="#handoff">Handoff</a>
+      <a href="#guards">Guards</a>
+      <a href="#source">Source</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" id="top">
+  <div class="hero">
+    <p class="kicker">Hermes Desktop plugin · read-only fan-out viewer</p>
+    <h1>See every worker. <span class="slash">Steer none.</span></h1>
+    <p class="lede"><strong>subagent-viewer</strong> turns the agent's async subagent fan-out into a live card view. Every spawned worker gets its own card with its goal, model, status, streaming thinking, latest tool line, and accumulated output.</p>
+    <p class="lede">This is the <strong>verified slice</strong> of the larger Chief of Staff fan-out plugin: watching spawned subagents was confirmed live, while steer and interrupt were not yet reliable. So this plugin observes and copies only.</p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Install the pane</a>
+      <a class="btn" href="https://github.com/aska-digital/protean-subagent-viewer">View source</a>
+    </div>
+    <div class="badges">
+      <span class="badge"><span class="dot"></span>v0.1.2</span>
+      <span class="badge"><span class="dot"></span>Hermes Desktop · desktop-only</span>
+      <span class="badge"><span class="dot"></span>observes + copies · never steers</span>
+      <span class="badge"><span class="dot"></span>no network · no telemetry</span>
+    </div>
+  </div>
+
+  <section id="install">
+    <h2><span class="n">01</span>Install</h2>
+    <p class="sub">One file in, done. The plugin root is profile-aware: copy <code>plugin.js</code> into the desktop plugin root of the profile you run.</p>
+    <div class="cmd">
+      <pre>mkdir -p ~/.hermes/profiles/halakukhan/desktop-plugins/subagent-viewer/
+cp plugin.js ~/.hermes/profiles/halakukhan/desktop-plugins/subagent-viewer/plugin.js</pre>
+      <button data-copy>copy</button>
+    </div>
+    <p class="note">Find <strong>Subagent Viewer</strong> in the ⌘K palette under the PLUGINS header and open the right-hand pane. Each <code>plugin.js</code> is file-watched, so edits reload live.</p>
+    <p class="sub" style="margin-bottom:0"><strong>Use your own profile root</strong> in place of <code>halakukhan</code> above: the active profile root, the one your desktop actually loads. No build step, no config, no restart.</p>
+  </section>
+
+  <section id="cards">
+    <h2><span class="n">02</span>Live worker cards</h2>
+    <p class="sub">One card per spawned subagent, keyed by <code>subagent_id</code>. Cards stream for the orchestrator that spawned the fan-out, following the active session id.</p>
+    <div class="grid cols3">
+      <div class="card">
+        <p class="tag">goal + status</p>
+        <h3>What it is doing</h3>
+        <p>Each card shows the worker's goal and a status badge:</p>
+        <p style="margin-top:10px"><span class="pill run">running</span><span class="pill done">done</span><span class="pill int">interrupted</span><span class="pill err">errored</span></p>
+      </div>
+      <div class="card">
+        <p class="tag">model · read-only</p>
+        <h3>Who is running it</h3>
+        <p>The worker model is shown as resolved by delegation, read-only. Streaming thinking is collapsible and capped around 2KB, with the latest tool line under it.</p>
+      </div>
+      <div class="card">
+        <p class="tag">accumulated output</p>
+        <h3>Everything it wrote</h3>
+        <p>Every <code>subagent.text</code> chunk is appended to the output preview, never overwritten. A show-all toggle reveals the full stream.</p>
+      </div>
+    </div>
+    <p style="height:18px"></p>
+    <div class="grid cols2">
+      <div class="card">
+        <h3>Active / Past toggle</h3>
+        <p>Split the view between running workers and finished, interrupted, or errored ones. All workers stay in state. Only the render is filtered.</p>
+      </div>
+      <div class="card">
+        <h3>Ownership-gated viewing</h3>
+        <p>The pane follows the active session id and streams cards for the orchestrator that spawned the fan-out. With no active workers, the empty state explains the flow.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="handoff">
+    <h2><span class="n">03</span>Copy output for forward</h2>
+    <p class="sub">When a worker finishes, one button puts its complete final answer on your clipboard for handoff. The copy grabs the full <code>final_response</code> from the orchestrator's live session history first.</p>
+    <p class="note"><strong>Fallback order when the full final answer is not there:</strong> the event summary, then the last tool results, then the accumulated buffer. The best available content is copied, never an empty clipboard.</p>
+    <ul class="tight">
+      <li><strong>Flow:</strong> post a <code>delegate_task</code> fan-out in the orchestrator session. Worker cards appear live as the subagents spawn.</li>
+      <li><strong>Watch:</strong> goal plus status badge, streaming thinking, latest tool line, accumulated output.</li>
+      <li><strong>Toggle</strong> Active/Past to review finished workers.</li>
+      <li><strong>Copy</strong> a worker's full final answer with one click.</li>
+    </ul>
+  </section>
+
+  <section id="guards">
+    <h2><span class="n">04</span>Scope guards</h2>
+    <p class="sub">The plugin's contract is restraint. It watches the fan-out and copies output. Everything else is out of scope by design.</p>
+    <table>
+      <tr><th>It never</th><th>Meaning</th></tr>
+      <tr><td>Steers or interrupts</td><td class="m">No control actions on workers or the orchestrator session</td></tr>
+      <tr><td>Spawns subagents</td><td class="m">Workers shown are real subagents from <code>delegate_task</code>. The plugin creates none</td></tr>
+      <tr><td>Touches the room log</td><td class="m">Does not read or write the room log or group-chats localStorage</td></tr>
+      <tr><td>Phones home</td><td class="m"><span class="ok">No telemetry</span>. All state is local to the running desktop process</td></tr>
+    </table>
+    <p class="note" style="margin-bottom:0"><strong>Requirements:</strong> Hermes backend v0.21.0 or newer. It must expose the <code>subagent.*</code> event stream (including <code>summary</code> and <code>output_tail</code> on <code>subagent.complete</code>) plus a live worker list. The pane ladders between <code>session.info</code> (carrying <code>active</code>) and <code>delegation.status</code>.</p>
+  </section>
+
+  <section id="source">
+    <h2><span class="n">05</span>Source</h2>
+    <p class="sub">MIT licensed. The plugin is one manifest plus one file: a self-contained <code>plugin.js</code> pane.</p>
+    <div class="cmd">
+      <pre>protean-subagent-viewer/
+├── plugin.yaml        # manifest: subagent-viewer 0.1.2, MIT
+└── desktop/
+    └── plugin.js      # the pane: cards, toggle, copy button</pre>
+    </div>
+    <div class="cta" style="margin-bottom:0">
+      <a class="btn primary" href="https://github.com/aska-digital/protean-subagent-viewer">GitHub repo</a>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <span><b style="color:var(--muted)">protean-subagent-viewer</b> v0.1.2 · MIT · by <a href="https://github.com/aska-digital">aska-digital</a></span>
+      <span class="spacer"></span>
+      <span>Read-only viewer for Hermes Desktop subagent fan-out</span>
+    </div>
+  </footer>
+</div>
+<script>
+document.querySelectorAll('[data-copy]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var pre = btn.parentElement.querySelector('pre');
+    navigator.clipboard.writeText(pre.textContent).then(function(){
+      btn.textContent = 'copied'; setTimeout(function(){ btn.textContent = 'copy'; }, 1200);
+    });
+  });
+});
+</script>
+</body>
+</html>
