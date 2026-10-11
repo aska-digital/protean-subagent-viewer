@@ -83,6 +83,12 @@ footer a:hover{color:var(--ink)}
 .pill.done{background:rgba(125,211,252,.12);color:var(--accent);border:1px solid rgba(125,211,252,.3)}
 .pill.int{background:rgba(255,212,121,.12);color:var(--warn);border:1px solid rgba(255,212,121,.3)}
 .pill.err{background:rgba(255,156,156,.12);color:var(--bad);border:1px solid rgba(255,156,156,.3)}
+.aska-return{position:fixed;left:18px;bottom:18px;z-index:2000;display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:9px;background:rgba(11,14,20,.92);border:1px solid var(--line);color:var(--ink);font-weight:600;font-size:14px;text-decoration:none;backdrop-filter:blur(8px)}
+.aska-return:hover{border-color:var(--accent);color:var(--accent)}
+.aska-made{position:fixed;right:18px;bottom:18px;z-index:2000;margin:0;font-size:12px;color:var(--muted)}
+.aska-made a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(125,211,252,.45)}
+.aska-made a:hover{color:var(--ink)}
+@media(max-width:700px){.aska-return{left:12px;bottom:12px;padding:10px 14px}.aska-made{right:12px;bottom:12px}}
 </style>
 </head>
 <body>
@@ -211,6 +217,8 @@ cp plugin.js ~/.hermes/profiles/halakukhan/desktop-plugins/subagent-viewer/plugi
     </div>
   </footer>
 </div>
+<a class="aska-return" href="https://askaconsult.com/">&#8592; Back to ASKA</a>
+<p class="aska-made">Built by <a href="https://askaconsult.com/digital/">Aska Digital</a></p>
 <script>
 document.querySelectorAll('[data-copy]').forEach(function(btn){
   btn.addEventListener('click', function(){
