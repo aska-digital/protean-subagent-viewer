@@ -30,8 +30,10 @@ it never steers, interrupts, spawns, or mutates the orchestrator session.
   **complete final answer**, extracting the full `final_response` from the
   orchestrator's live session history and falling back to the event summary,
   then the last tool results, then the accumulated buffer.
-- **Ownership-gated viewing** — follows the active session id; cards stream
-  for the orchestrator that spawned the fan-out.
+- **Session-scoped viewing** — follows the focused runtime session (the active
+  session on older hosts). Cards and buffers reset on a focus/source change;
+  polling repopulates that session's current roster. Events from other sessions
+  are ignored, and copy reads the card's owning runtime session history.
 
 ## Install
 
@@ -61,10 +63,15 @@ Empty state (no active workers) explains the flow.
 
 ## Requirements
 
-- Hermes backend **v0.21.0+** exposing the `subagent.*` event stream (incl.
-  `summary` and `output_tail` on `subagent.complete`) and a live worker list.
-  The pane ladders between `session.info` (carrying `active`) and
-  `delegation.status` — whichever the backend serves.
+- Hermes backend exposing `subagent.list({session_id})` and the `subagent.*`
+  event stream (including `summary` and `output_tail` on `subagent.complete`).
+  The runtime/UI id from the desktop is the owner key for roster, history, and
+  events; durable conversation ids and child ids are different identifiers.
+  A backend without the scoped roster RPC shows an unavailable state. The
+  viewer never falls back to the global `delegation.status` registry.
+- The SDK's `host.request` uses the active gateway. A focused tile owned by a
+  different source/profile shows an empty state until that gateway is active;
+  the viewer does not guess a route to another source.
 - Workers are REAL subagents spawned by `delegate_task`. This plugin never
   spawns anything; it observes and copies.
 - No telemetry. All state is local to the running desktop process.
@@ -74,3 +81,16 @@ Empty state (no active workers) explains the flow.
 - Does not touch the room log / group-chats localStorage.
 - Does not auto-spawn, steer, or interrupt anything.
 - No telemetry, all local.
+
+## Validation
+
+Run `node --test tests/session-scope.cjs` to execute the checked-in plugin with
+synthetic session data and host/React lifecycle mocks, including delayed polls,
+queued state updates, focus changes, global event filtering, and full-output
+copy. These tests and a read-only SDK contract check validate the scope logic;
+they do not establish live desktop acceptance for this change.
+
+Manual acceptance still required: in the desktop, open two orchestrator sessions
+with distinct workers, switch focus during a poll and a copy, confirm active and
+past cards remain scoped, switch back, and verify copied output belongs to the
+selected card's session. No live installation is performed by the test suite.
