@@ -14,18 +14,12 @@
  * it never steers, interrupts, spawns, or mutates the orchestrator session.
  *
  * Data sources (all local, no telemetry):
- *   - Live worker list: the gateway's `active` subagent snapshot. Preferred
- *     RPC is `session.info` (returns `active` when the backend carries it);
- *     this checkout registers `delegation.status` as the reliable `active`
- *     source, so we LADDER: try `session.info`, fall back to
- *     `delegation.status`. Both return records shaped
- *     `{subagent_id, parent_id, depth, goal, model, started_at, tool_count,
- *     status}`.
- *   - Live stream: `subagent.*` events (start / thinking / text / tool /
- *     complete / progress) relayed by the owning session's delegate_task —
- *     reach renderer plugin listeners FIRST via emitGatewayEvent.
- *   - Poll `session.info` (then `delegation.status`) every ~8s as a backstop,
- *     coalesced so overlapping polls never stack.
+ *   - Session-scoped roster: `subagent.list({session_id})` using the focused
+ *     runtime/UI id. Durable conversation and child ids are not owner ids.
+ *   - Live stream: globally broadcast `subagent.*` events, accepted only for
+ *     the current owning runtime session and available gateway source tags.
+ *   - Poll every ~8s; discard responses after focus/source changes or newer
+ *     events. Older backends without the scoped RPC show an unavailable state.
  *
  * No upstream approval needed: standalone desktop plugin, mirrors
  * group-model-sync's register + pane + host.request + host.onEvent shape.
@@ -59,6 +53,7 @@ const STATUS_LABELS = {
   running: 'running',
   done: 'done',
   complete: 'done',
+  completed: 'done',
   interrupted: 'interrupted',
   error: 'errored',
   errored: 'errored',
@@ -99,52 +94,50 @@ const normalizeStatus = raw => {
 
 const statusVariant = raw => STATUS_VARIANTS[normalizeStatus(raw)] || 'muted'
 
-/** The pane's active session id — host.state.activeSessionId atom, falling
- *  back to the last seen session.info event session_id. */
-function currentSessionId(fallbackEventSid) {
+/** SDK atoms are optional on older standalone-plugin hosts. */
+function readHostState(name) {
   try {
-    const atom = host.state && host.state.activeSessionId
-    const live = typeof atom === 'function' ? atom() : atom
-    const sid = live && typeof live.get === 'function' ? live.get() : live
-    if (sid) {
-      return str(sid)
-    }
+    const value = host.state && host.state[name]
+    const atom = typeof value === 'function' ? value() : value
+    return atom && typeof atom.get === 'function' ? atom.get() : atom
   } catch {
-    /* atom read failed — fall through */
+    return undefined
   }
-  return fallbackEventSid ? str(fallbackEventSid) : ''
 }
+
+function currentScope() {
+  const state = host.state || {}
+  const gateway = readHostState('gateway')
+  const owner = asRecord(readHostState('focusedSessionOwner'))
+  const connectionId = str(readHostState('connectionId'))
+  const profile = str(readHostState('profile'))
+  // host.request uses the active gateway. A differently routed focused tile
+  // cannot be addressed through that door; refuse instead of guessing a route.
+  const unavailable = (gateway != null && gateway !== 'open')
+    || (owner.connectionId && owner.connectionId !== connectionId)
+    || (owner.profile && owner.profile !== profile)
+  const sessionId = unavailable ? '' : str(readHostState(
+    state.focusedSessionId !== undefined ? 'focusedSessionId' : 'activeSessionId'
+  ))
+  return { sessionId, connectionId, profile }
+}
+
+const scopeKey = scope => JSON.stringify([scope.sessionId, scope.connectionId, scope.profile])
 
 // ── RPC helpers ─────────────────────────────────────────────────────────────
 
 /** The gateway JSON-RPC door. */
 const gate = (method, params = {}) => host.request(method, params)
 
-/** Live worker snapshot — ladder: session.info (per brief) → delegation.status
- *  (the registered `active` source in this checkout). */
-async function fetchActiveWorkers() {
-  try {
-    const res = await gate('session.info', {})
-    const rec = asRecord(res)
-    const active = Array.isArray(rec.active)
-      ? rec.active
-      : Array.isArray(rec.payload && rec.payload.active)
-        ? rec.payload.active
-        : null
-    if (active) {
-      return { active, source: 'session.info' }
-    }
-    /* session.info resolved but carried no active list — ladder down */
-  } catch {
-    /* unknown method or transport error — ladder down */
+/** The supported roster RPC owns its filtering, including durable lineage
+ *  after reconnect. Never fall back to a global delegation registry. */
+async function fetchActiveWorkers(sessionId) {
+  const rec = asRecord(await gate('subagent.list', { session_id: sessionId }))
+  if (!Array.isArray(rec.subagents)) {
+    throw new Error('Session-scoped worker roster unavailable')
   }
-  const res = await gate('delegation.status', {})
-  const rec = asRecord(res)
-  const active = Array.isArray(rec.active) ? rec.active : null
-  return { active: active || [], source: 'delegation.status' }
+  return { active: [...rec.subagents, ...(Array.isArray(rec.delegations) ? rec.delegations : [])] }
 }
-
-
 
 /** Pull the FULL final_response for a worker out of the ORCHESTRATOR's session
  *  history. The [ASYNC DELEGATION BATCH COMPLETE] message injected into the
@@ -190,8 +183,9 @@ function extractDelegationSummary(goal, messages) {
  *  4. `outputBuffer` — locally accumulated previews (thin: the gateway
  *     DELIBERATELY skips subagent.text to the parent — server.py "skip the
  *     parent emit"). */
-async function fetchFullOutput(worker, orchSid) {
+async function fetchFullOutput(worker) {
   const rec = asRecord(worker)
+  const orchSid = rec.ownerSessionId
   const summary = str(rec.summary || '').trim()
   if (orchSid && rec.goal) {
     try {
@@ -241,7 +235,12 @@ function StatusBadge({ status }) {
 
 // ── worker card ─────────────────────────────────────────────────────────────
 
-function WorkerCard({ worker, sessionId, onCopied }) {
+function WorkerCard({ worker, onCopied, isOwnerCurrent }) {
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
   const [thinkingOpen, setThinkingOpen] = useState(true)
   const [busy, setBusy] = useState('')
   // FIX 4 — output body expand/collapse so full in-pane worker output is
@@ -267,13 +266,16 @@ function WorkerCard({ worker, sessionId, onCopied }) {
   const doCopy = async () => {
     setBusy('copy')
     try {
-      const full = await fetchFullOutput(worker, sessionId)
+      if (!isOwnerCurrent()) return
+      const full = await fetchFullOutput(worker)
+      if (!alive.current || !isOwnerCurrent()) return
       await navigator.clipboard.writeText(full)
+      if (!alive.current || !isOwnerCurrent()) return
       onCopied(`Copied full output for ${worker.subagent_id}`)
     } catch (e) {
-      onCopied(`Copy failed: ${rpcErrorText(e)}`)
+      if (alive.current && isOwnerCurrent()) onCopied(`Copy failed: ${rpcErrorText(e)}`)
     } finally {
-      setBusy('')
+      if (alive.current) setBusy('')
     }
   }
 
@@ -409,34 +411,50 @@ function WorkerCard({ worker, sessionId, onCopied }) {
 // ── pane root ───────────────────────────────────────────────────────────────
 
 function PaneRoot() {
-  const [sessionId, setSessionId] = useState(() => currentSessionId(''))
+  const [sessionId, setSessionId] = useState(() => currentScope().sessionId)
   const [workers, setWorkers] = useState([])
   const [status, setStatus] = useState('')
   const [loading, setLoading] = useState(true)
   // fix 5 — view toggle: 'active' (running) | 'past' (done/interrupted/errored)
   const [view, setView] = useState('active')
-  const pollInFlight = useRef(false)
-  const eventSid = useRef('')
+  const scopeRef = useRef({ ...currentScope(), generation: 0 })
+  const pollInFlight = useRef(null)
+  const eventRevision = useRef(0)
+  const disposed = useRef(false)
 
-  // Refresh the active-session id from the live atom periodically (the atom
-  // can be null on a fresh draft and populate once a session activates).
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      setSessionId(s => currentSessionId(eventSid.current) || s)
-    }, POLL_MS)
-    return () => window.clearInterval(t)
-  }, [])
+  const syncScope = () => {
+    const next = currentScope()
+    if (scopeKey(next) !== scopeKey(scopeRef.current)) {
+      scopeRef.current = { ...next, generation: scopeRef.current.generation + 1 }
+      pollInFlight.current = null
+      eventRevision.current++
+      setSessionId(next.sessionId)
+      setWorkers([])
+      setView('active')
+      setStatus('')
+      setLoading(!!next.sessionId)
+    }
+    return scopeRef.current
+  }
+
+  const isCurrent = scope => {
+    if (disposed.current) return false
+    syncScope()
+    return scopeRef.current === scope
+  }
 
   /** Upsert a worker card keyed by subagent_id. `_appendOutput` marks output
    *  chunks that ACCUMULATE (subagent.text / subagent.complete previews) —
    *  never overwrite; everything else replaces its field. */
   const upsertWorker = patch => {
+    const scope = scopeRef.current
     const rec = asRecord(patch)
     const sid = str(rec.subagent_id)
     if (!sid) {
       return
     }
     setWorkers(prev => {
+      if (disposed.current || scopeRef.current !== scope || scopeKey(currentScope()) !== scopeKey(scope)) return prev
       const idx = prev.findIndex(w => w.subagent_id === sid)
       if (idx === -1) {
         const initialOutput = rec.outputBuffer != null
@@ -446,6 +464,9 @@ function PaneRoot() {
           ...prev,
           {
             subagent_id: sid,
+            ownerGeneration: scope.generation,
+            ownerSessionId: scope.sessionId,
+            ownerScopeKey: scopeKey(scope),
             parent_id: rec.parent_id ? str(rec.parent_id) : '',
             depth: rec.depth != null ? rec.depth : 0,
             goal: rec.goal != null ? str(rec.goal) : '',
@@ -498,17 +519,20 @@ function PaneRoot() {
     })
   }
 
-  /** Poll session.info (→ delegation.status) as the backstop live-worker
-   *  source, coalesced. Poll records MERGE into existing workers so
-   *  accumulated fields (outputBuffer, child_session_id, thinking) survive. */
+  /** Coalesce within one focus generation; a new session can poll while the
+   *  old request is still pending. Events win over older roster snapshots. */
   const pollWorkers = async () => {
-    if (pollInFlight.current) {
+    const scope = syncScope()
+    if (!scope.sessionId) {
+      setLoading(false)
       return
     }
-    pollInFlight.current = true
+    if (pollInFlight.current === scope) return
+    pollInFlight.current = scope
+    const revision = eventRevision.current
     try {
-      const { active } = await fetchActiveWorkers()
-      const seen = new Set()
+      const { active } = await fetchActiveWorkers(scope.sessionId)
+      if (!isCurrent(scope) || revision !== eventRevision.current) return
       const byId = {}
       for (const w of active) {
         const rec = asRecord(w)
@@ -516,9 +540,11 @@ function PaneRoot() {
         if (!sid) {
           continue
         }
-        seen.add(sid)
         byId[sid] = {
           subagent_id: sid,
+          ownerGeneration: scope.generation,
+          ownerSessionId: scope.sessionId,
+          ownerScopeKey: scopeKey(scope),
           parent_id: rec.parent_id ? str(rec.parent_id) : '',
           depth: rec.depth != null ? rec.depth : 0,
           goal: rec.goal != null ? str(rec.goal) : '',
@@ -529,6 +555,7 @@ function PaneRoot() {
         }
       }
       setWorkers(prev => {
+        if (disposed.current || scopeRef.current !== scope || scopeKey(currentScope()) !== scopeKey(scope)) return prev
         const merged = prev.map(w => {
           const poll = byId[w.subagent_id]
           if (!poll) {
@@ -541,10 +568,10 @@ function PaneRoot() {
       })
       setStatus('')
     } catch (err) {
-      setStatus(`Worker poll failed: ${rpcErrorText(err)}`)
+      if (isCurrent(scope)) setStatus(`Session-scoped worker roster unavailable: ${rpcErrorText(err)}`)
     } finally {
-      pollInFlight.current = false
-      setLoading(false)
+      if (pollInFlight.current === scope) pollInFlight.current = null
+      if (isCurrent(scope)) setLoading(false)
     }
   }
 
@@ -552,23 +579,22 @@ function PaneRoot() {
   const refresh = async () => {
     setLoading(true)
     setStatus('')
-    const sid = currentSessionId(eventSid.current)
-    if (sid) {
-      setSessionId(sid)
-    }
+    syncScope()
     await pollWorkers()
   }
 
   // Mount: subscribe to the subagent.* event family + initial load.
   useEffect(() => {
+    disposed.current = false
     refresh()
     const disposers = SUBAGENT_EVENTS.map(type =>
       host.onEvent(type, event => {
         const payload = asRecord(event && event.payload)
-        const sid = event && event.session_id
-        if (sid) {
-          eventSid.current = str(sid)
-        }
+        const scope = syncScope()
+        if (!scope.sessionId || str(event && event.session_id) !== scope.sessionId) return
+        if (event.connectionId && str(event.connectionId) !== scope.connectionId) return
+        if (event.profile && str(event.profile) !== scope.profile) return
+        eventRevision.current++
         if (!payload.subagent_id) {
           return
         }
@@ -616,18 +642,23 @@ function PaneRoot() {
         }
       })
     )
-    // Also latch the session id from session.info events.
-    const sidDisp = host.onEvent('session.info', event => {
-      const sid = event && event.session_id
-      if (sid) {
-        eventSid.current = str(sid)
-        setSessionId(str(sid))
-      }
+    // Nanostore change subscriptions update focus immediately. The timer
+    // remains the compatibility backstop for older hosts with get-only atoms.
+    const focusChanged = () => { syncScope(); void pollWorkers() }
+    const stateDisposers = ['focusedSessionId', 'activeSessionId', 'gateway',
+      'connectionId', 'profile', 'focusedSessionOwner'].map(name => {
+      const atom = host.state && host.state[name]
+      if (atom && typeof atom.listen === 'function') return atom.listen(focusChanged)
+      if (atom && typeof atom.subscribe === 'function') return atom.subscribe(focusChanged)
+      return null
     })
     const poll = window.setInterval(() => void pollWorkers(), POLL_MS)
     return () => {
+      disposed.current = true
       disposers.forEach(d => d && d())
-      sidDisp && sidDisp()
+      stateDisposers.forEach(d => d && d())
+      scopeRef.current = { ...scopeRef.current, generation: scopeRef.current.generation + 1 }
+      pollInFlight.current = null
       window.clearInterval(poll)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -748,9 +779,11 @@ function PaneRoot() {
                   }),
                   ...filteredWorkers.map(w =>
                     jsx(WorkerCard, {
-                      key: w.subagent_id,
+                      key: `${w.ownerScopeKey}:${w.ownerGeneration}:${w.subagent_id}`,
+                      isOwnerCurrent: () => !disposed.current
+                        && scopeRef.current.generation === w.ownerGeneration
+                        && scopeKey(currentScope()) === w.ownerScopeKey,
                       onCopied: msg => setStatus(msg),
-                      sessionId,
                       worker: w
                     })
                   )
